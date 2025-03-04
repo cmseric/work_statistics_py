@@ -1,6 +1,7 @@
 build
 dist
 data.json
-main.spec
 
 *.csv
+*.spec
+*.log
