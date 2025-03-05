@@ -1,7 +1,10 @@
 build
 dist
 data.json
+data_todo.json
+todo.txt
 
+*.xlsx
 *.csv
 *.spec
 *.log
