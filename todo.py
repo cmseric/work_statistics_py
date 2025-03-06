@@ -536,7 +536,7 @@ class WorkTracker(QWidget):
             QMessageBox.critical(self, "导出失败", f"错误信息：\n{str(e)}")
 
     def set_app_icon(self):
-        icon_path = os.path.join(BASE_DIR, 'app.ico')
+        icon_path = os.path.join(BASE_DIR, 'favicon.ico')
 
         # Windows特殊处理
         if sys.platform == 'win32':
@@ -545,10 +545,11 @@ class WorkTracker(QWidget):
 
         # MacOS特殊处理
         elif sys.platform == 'darwin':
-            from Foundation import NSBundle
-            bundle = NSBundle.mainBundle()
-            info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
-            info['CFBundleIconFile'] = 'favicon.icns'
+            print("macos")
+            # from Foundation import NSBundle
+            # bundle = NSBundle.mainBundle()
+            # info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+            # info['CFBundleIconFile'] = 'AppIcon.'
 
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
