@@ -2,14 +2,17 @@ import os
 import sys
 import json
 import logging
+import csv
+
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QPushButton,
     QLineEdit, QLabel, QMessageBox, QTabWidget,
     QComboBox, QProgressBar, QDateEdit, QInputDialog,
-    QSizePolicy, QCheckBox, QFileDialog
+    QSizePolicy, QCheckBox, QFileDialog, QDialog,
+    QDialogButtonBox
 )
-from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtCore import Qt, QDate, QDateTime
 from PyQt5.QtGui import QIcon
 
 if getattr(sys, 'frozen', False):
@@ -61,6 +64,10 @@ class WorkTracker(QWidget):
         self.autostart_checkbox = QCheckBox("开机自动启动")
         self.autostart_checkbox.stateChanged.connect(self.toggle_autostart)
         btn_layout.addWidget(self.autostart_checkbox)
+
+        self.import_btn = QPushButton("导入数据")
+        self.import_btn.clicked.connect(self.import_data)
+        btn_layout.addWidget(self.import_btn)
 
         self.export_btn = QPushButton("导出全部数据")
         self.export_btn.clicked.connect(self.export_all_data)
@@ -211,10 +218,10 @@ class WorkTracker(QWidget):
         table.setColumnWidth(1, 100)  # 类型列
         table.setColumnWidth(2, 190)  # 进度条列
         table.setColumnWidth(3, 100)  # 目标列
-        table.setColumnWidth(4, 80)   # 截止时间列
+        table.setColumnWidth(4, 100)   # 截止时间列
         if len(headers) > 5:
-            table.setColumnWidth(5, 80)  # 完成时间列
-        table.setColumnWidth(len(headers) - 1, 120)  # 操作列
+            table.setColumnWidth(5, 100)  # 完成时间列
+        table.setColumnWidth(len(headers) - 1, 220)  # 操作列
 
     def create_tab(self, table):
         widget = QWidget()
@@ -375,6 +382,11 @@ class WorkTracker(QWidget):
                 update_btn.clicked.connect(lambda _, i=idx: self.update_progress(i))
                 btn_layout.addWidget(update_btn)
 
+                # Edit button
+                edit_btn = QPushButton("编辑")
+                edit_btn.clicked.connect(lambda _, i=idx: self.edit_todo(i))
+                btn_layout.addWidget(edit_btn)
+
             delete_btn = QPushButton("删除")
             delete_btn.clicked.connect(lambda _, i=idx: self.delete_todo(i))
             btn_layout.addWidget(delete_btn)
@@ -450,6 +462,70 @@ class WorkTracker(QWidget):
         self.save_data()
         self.refresh_todo_tables()
 
+    def edit_todo(self, index):
+        todo = self.data["todos"][index]
+        dialog = QDialog(self)
+        dialog.setWindowTitle("编辑TODO项")
+        layout = QVBoxLayout()
+
+        # 名称编辑
+        name_edit = QLineEdit(todo["name"])
+        layout.addWidget(QLabel("名称:"))
+        layout.addWidget(name_edit)
+
+        # 目标编辑
+        target_edit = QLineEdit(str(todo["target"]))
+        layout.addWidget(QLabel("目标:"))
+        layout.addWidget(target_edit)
+
+        # 截止时间选择
+        deadline_edit = QDateEdit(QDate.fromString(todo["deadline"], "yyyy-MM-dd"))
+        deadline_edit.setCalendarPopup(True)
+        layout.addWidget(QLabel("截止时间:"))
+        layout.addWidget(deadline_edit)
+
+        # 进度编辑（根据类型）
+        if todo["progress_type"] == ProgressType.ABSOLUTE:
+            progress_edit = QLineEdit(str(todo["progress"]))
+            layout.addWidget(QLabel("当前进度:"))
+            layout.addWidget(progress_edit)
+        else:
+            progress_label = QLabel(str(todo["progress"]))
+            layout.addWidget(QLabel("累计进度:"))
+            layout.addWidget(progress_label)
+
+        # 确认按钮
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(dialog.accept)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        dialog.setLayout(layout)
+
+        if dialog.exec_() == QDialog.Accepted:
+            try:
+                # 数据校验
+                new_target = float(target_edit.text())
+                new_deadline = deadline_edit.date().toString("yyyy-MM-dd")
+
+                # 更新数据
+                todo.update({
+                    "name": name_edit.text(),
+                    "target": new_target,
+                    "deadline": new_deadline
+                })
+
+                # 处理绝对进度更新
+                if todo["progress_type"] == ProgressType.ABSOLUTE:
+                    new_progress = float(progress_edit.text())
+                    todo["progress"] = min(new_progress, new_target)
+
+                self.save_data()
+                self.refresh_todo_tables()
+
+            except ValueError:
+                QMessageBox.warning(self, "输入错误", "请输入有效的数字")
+
     def resizeEvent(self, event):
         # 窗口大小改变时实时保存
         self.data["window_size"] = [self.width(), self.height()]
@@ -477,63 +553,131 @@ class WorkTracker(QWidget):
             return "无效目标"
 
     def export_all_data(self):
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "保存文件", "", "Excel文件 (*.xlsx)"
-        )
-        if not filename:
-            return
+        dir_path = QFileDialog.getExistingDirectory(self, "选择保存目录")
+        if not dir_path: return
 
         try:
-            import pandas as pd
+            timestamp = QDateTime.currentDateTime().toString("yyyyMMdd_hhmmss")
+            export_dir = os.path.join(dir_path, f"export_{timestamp}")
+            os.makedirs(export_dir, exist_ok=True)
 
-            # 准备数据
-            projects_df = pd.DataFrame([
-                {
-                    "项目类型": name,
-                    "单位": info["unit"],
-                    "完成数量": info["count"],
-                    "进度类型": info["progress_type"]
-                }
-                for name, info in self.data["projects"].items()
-            ])
+            # 导出项目数据
+            projects_path = os.path.join(export_dir, "projects.csv")
+            with open(projects_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=["类型", "单位", "进度类型", "完成数量"])
+                writer.writeheader()
+                for name, info in self.data["projects"].items():
+                    writer.writerow({
+                        "类型": name,
+                        "单位": info["unit"],
+                        "进度类型": info["progress_type"],
+                        "完成数量": info["count"]
+                    })
 
-            todos_df = pd.DataFrame([
-                {
-                    "名称": todo["name"],
-                    "类型": todo["type"],
-                    "单位": todo["unit"],
-                    "目标": todo["target"],
-                    "当前进度": self.format_progress(todo),
-                    "进度类型": todo["progress_type"],
-                    "截止时间": todo["deadline"],
-                    "完成状态": "是" if todo["completed"] else "否",
-                    "完成时间": todo.get("complete_time", "")
-                }
-                for todo in self.data["todos"]
-            ])
+            # 导出TODO数据
+            todos_path = os.path.join(export_dir, "todos.csv")
+            with open(todos_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    "名称", "类型", "目标值", "当前进度", "进度类型",
+                    "截止时间", "完成状态", "完成时间"
+                ])
+                writer.writeheader()
+                for todo in self.data["todos"]:
+                    writer.writerow({
+                        "名称": todo["name"],
+                        "类型": todo["type"],
+                        "目标值": todo["target"],
+                        "当前进度": todo["progress"],
+                        "进度类型": todo["progress_type"],
+                        "截止时间": todo["deadline"],
+                        "完成状态": "已完成" if todo["completed"] else "进行中",
+                        "完成时间": todo.get("complete_time", "")
+                    })
 
-            # 写入Excel
-            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
-                projects_df.to_excel(writer, sheet_name='完成统计', index=False)
-                todos_df.to_excel(writer, sheet_name='TODO列表', index=False)
-
-                # 调整列宽
-                for sheet in writer.sheets:
-                    worksheet = writer.sheets[sheet]
-                    worksheet.column_dimensions['A'].width = 20
-                    worksheet.column_dimensions['B'].width = 15
-                    worksheet.column_dimensions['C'].width = 10
-                    worksheet.column_dimensions['D'].width = 15
-                    worksheet.column_dimensions['E'].width = 20
-                    worksheet.column_dimensions['F'].width = 15
-                    worksheet.column_dimensions['G'].width = 15
-                    worksheet.column_dimensions['H'].width = 10
-                    worksheet.column_dimensions['I'].width = 15
-
-            QMessageBox.information(self, "导出成功", f"文件已保存至：\n{filename}")
+            QMessageBox.information(self, "导出成功", f"数据已保存至：{export_dir}")
 
         except Exception as e:
-            QMessageBox.critical(self, "导出失败", f"错误信息：\n{str(e)}")
+            QMessageBox.critical(self, "导出失败", f"错误信息：{str(e)}")
+
+    def import_data(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择数据文件", "", "CSV文件 (*.csv)"
+        )
+        if not file_path: return
+
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+
+                if "单位" in reader.fieldnames:  # 项目数据
+                    for row in reader:
+                        name = row["类型"]
+                        if name in self.data["projects"]:
+                            # 更新现有项目
+                            self.data["projects"][name].update({
+                                "unit": row["单位"],
+                                "progress_type": row["进度类型"],
+                                "count": int(row["完成数量"])
+                            })
+                        else:
+                            # 新增项目
+                            self.data["projects"][name] = {
+                                "unit": row["单位"],
+                                "progress_type": row["进度类型"],
+                                "count": int(row["完成数量"])
+                            }
+
+                elif "名称" in reader.fieldnames:  # TODO数据
+                    for row in reader:
+                        # 添加校验逻辑
+                        required_fields = ["名称", "类型", "目标值", "进度类型", "截止时间"]
+                        for field in required_fields:
+                            if field not in row or not row[field]:
+                                raise ValueError(f"缺少必要字段: {field}")
+
+                        # 添加类型存在性校验
+                        if row["类型"] not in self.data["projects"]:
+                            raise ValueError(f"项目类型'{row['类型']}'尚未定义")
+
+                        # 获取项目类型
+                        type_name = row["类型"]
+
+                        # 验证项目是否存在
+                        if type_name not in self.data["projects"]:
+                            QMessageBox.warning(self, "导入错误",
+                                                f"项目类型'{type_name}'不存在，请先创建该类型")
+                            continue
+
+                        # 从已存在的项目中获取单位
+                        unit = self.data["projects"][type_name]["unit"]
+
+                        # 数据转换
+                        todo = {
+                            "name": row["名称"],
+                            "type": row["类型"],
+                            "unit": unit,
+                            "target": float(row["目标值"]),
+                            "progress": float(row["当前进度"]),
+                            "progress_type": row["进度类型"],
+                            "deadline": row["截止时间"],
+                            "completed": row["完成状态"] == "已完成",
+                            "complete_time": row["完成时间"] if row["完成状态"] == "已完成" else ""
+                        }
+
+                        # 避免重复添加
+                        if not any(
+                                t["name"] == todo["name"] and
+                                t["type"] == todo["type"]
+                                for t in self.data["todos"]
+                        ):
+                            self.data["todos"].append(todo)
+
+            self.save_data()
+            self.refresh_table()
+            QMessageBox.information(self, "导入成功", "数据已成功加载")
+
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"数据解析错误：{str(e)}")
 
     def set_app_icon(self):
         icon_path = os.path.join(BASE_DIR, 'favicon.ico')
