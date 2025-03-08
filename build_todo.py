@@ -3,7 +3,7 @@ import PyInstaller.__main__
 import datetime
 
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-exe_name = f"TodoTracker_{timestamp}"
+exe_name = f"TodoTracker"
 
 if sys.platform == 'win32':
     PyInstaller.__main__.run([
@@ -17,6 +17,8 @@ if sys.platform == 'win32':
         '--icon=favicon.ico'
     ])
 elif sys.platform == 'darwin':
+    bundle_id = 'com.cmseric.TodoTracker'
+
     PyInstaller.__main__.run([
         'todo.py',
         '--onefile',
@@ -25,5 +27,7 @@ elif sys.platform == 'darwin':
         exe_name,
         '--add-data',
         'AppIcon.icns:.',
-        '--icon=AppIcon.icns'
+        '--icon=AppIcon.icns',
+        '--osx-bundle-identifier',
+        bundle_id
     ])
