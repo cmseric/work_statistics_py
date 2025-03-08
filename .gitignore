@@ -1,5 +1,7 @@
 build
 dist
+packages
+
 data.json
 data_todo.json
 todo.txt
