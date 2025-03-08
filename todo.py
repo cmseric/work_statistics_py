@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import csv
+import shutil
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -15,15 +16,29 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QDate, QDateTime
 from PyQt5.QtGui import QIcon
 
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DATA_FILE = os.path.join(BASE_DIR, "data_todo.json")
+def get_base_path():
+    """获取跨平台数据存储路径"""
+    if getattr(sys, 'frozen', False):
+        app_name = "TodoTracker"
+        if sys.platform == "win32":
+            data_dir = os.path.join(os.getenv('APPDATA'), app_name)
+        elif sys.platform == "darwin":
+            data_dir = os.path.expanduser(f'~/Library/Application Support/{app_name}')
+        else:  # Linux
+            data_dir = os.path.expanduser(f'~/.config/{app_name}')
+    else:
+        data_dir = os.path.dirname(os.path.abspath(__file__))
+
+    os.makedirs(data_dir, exist_ok=True)
+    return os.path.join(data_dir)
+
+
+DATA_DIR = get_base_path()
+DATA_FILE = os.path.join(DATA_DIR, "data_todo.json")
 
 logging.basicConfig(
-    filename=os.path.join(BASE_DIR, "debug.log"),
+    filename=os.path.join(DATA_DIR, "debug.log"),
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     encoding="utf-8"
@@ -35,16 +50,161 @@ class ProgressType:
     CUMULATIVE = "cumulative"
 
 
+class DataManager:
+    def __init__(self):
+        self.data = self._load_initial_data()
+        self.window_size = self.data.get("window_size", [800, 500])
+
+    def _load_initial_data(self):
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"projects": {}, "todos": [], "window_size": [800, 500]}
+
+    def save(self, window_size=None):
+        if window_size:
+            self.data["window_size"] = window_size
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.data, f, ensure_ascii=False, indent=4)
+
+
+data_mgr = DataManager()
+
+
+class AutoStartManager:
+    def __init__(self, app_name="TodoTracker"):
+        self.app_name = app_name
+        self.startup_folder = ''
+        self.shortcut_path = ''
+        self.init_state()
+
+    def init_state(self):
+        if sys.platform == "win32":
+            self.startup_folder = os.path.join(
+                os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
+            )
+            self.shortcut_path = os.path.join(
+                self.startup_folder,
+                f'{self.app_name}.lnk'
+            )
+        elif sys.platform == "darwin":
+            self.startup_folder = os.path.expanduser('~/Library/LaunchAgents')
+            self.shortcut_path = os.path.join(
+                self.startup_folder,
+                f"{self.app_name}.plist"
+            )
+        else:  # Linux
+            self.startup_folder = os.path.expanduser(f'~/.config/autostart')
+            self.shortcut_path = os.path.expanduser(f'~/.config/autostart/{self.app_name}.desktop')
+
+    def enable(self):
+        if sys.platform == "win32":
+            self._create_windows_shortcut()
+        elif sys.platform == "darwin":
+            self._create_macos_launchagent()
+        else:
+            self._create_linux_desktop_entry()
+
+    def disable(self):
+        if os.path.exists(self.shortcut_path):
+            os.remove(self.shortcut_path)
+
+    def _create_windows_shortcut(self):
+        # import winshell
+        from win32com.client import Dispatch
+
+        shortcut = Dispatch('WScript.Shell').CreateShortCut(self.shortcut_path)
+        shortcut.TargetPath = sys.executable
+        shortcut.WorkingDirectory = os.path.dirname(sys.executable)
+        shortcut.save()
+
+    def _create_macos_launchagent(self):
+        """创建macOS自启动服务"""
+        try:
+            # 确定应用路径
+            if getattr(sys, 'frozen', False):
+                # 打包应用模式
+                app_path = os.path.dirname(sys.executable)
+                if ".app/Contents/MacOS" in app_path:
+                    app_bundle = app_path.split(".app/Contents/MacOS")[0] + ".app"
+                    executable = f'"{app_bundle}/Contents/MacOS/{os.path.basename(sys.executable)}"'
+                else:
+                    executable = f'"{sys.executable}"'
+            else:
+                # 开发模式
+                executable = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+
+            # 创建plist内容
+            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>Label</key>
+        <string>com.cmseric.{self.app_name}</string>
+        <key>ProgramArguments</key>
+        <array>
+            <string>/bin/sh</string>
+            <string>-c</string>
+            <string>{executable}</string>
+        </array>
+        <key>RunAtLoad</key>
+        <true/>
+        <key>KeepAlive</key>
+        <false/>
+    </dict>
+    </plist>"""
+
+            # 确保目录存在
+            os.makedirs(os.path.dirname(self.shortcut_path), exist_ok=True)
+
+            # 写入plist文件
+            with open(self.shortcut_path, 'w') as f:
+                f.write(plist_content)
+
+            # 设置文件权限
+            os.chmod(self.shortcut_path, 0o644)
+
+        except Exception as e:
+            logging.error(f"创建macOS自启动失败: {str(e)}")
+            raise
+
+    def _create_linux_desktop_entry(self):
+        if not os.path.exists(self.startup_folder):
+            os.makedirs(self.startup_folder)
+        with open(self.shortcut_path, 'w') as f:
+            f.write(f"""[Desktop Entry]
+        Type=Application
+        Exec={sys.executable} {os.path.abspath(__file__)}
+        Hidden=false
+        NoDisplay=false
+        X-GNOME-Autostart-enabled=true
+        Name=WorkTracker
+        Comment=Start WorkTracker on login
+        """)
+
+
+autostart_mgr = AutoStartManager()
+
+
 class WorkTracker(QWidget):
     def __init__(self):
         super().__init__()
-        self.load_data()
         self.initUI()
+        self.init_state()
         self.refresh_table()
+
+    def init_state(self):
+        # 窗口尺寸初始化
+        self.resize(*data_mgr.window_size)
+
+        # 自启动状态初始化
+        self.autostart_checkbox.setChecked(
+            os.path.exists(autostart_mgr.shortcut_path)
+        )
 
     def initUI(self):
         self.setWindowTitle("TodoTracker")
-        self.resize(*self.stored_size)  # 使用存储的尺寸
         self.set_app_icon()
 
         layout = QVBoxLayout()
@@ -77,60 +237,11 @@ class WorkTracker(QWidget):
 
         self.setLayout(layout)
 
-        # 初始化自启动状态
-        self.init_autostart()
-
-    def init_autostart(self):
-        if sys.platform == "win32":
-            startup_folder = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs',
-                                          'Startup')
-            shortcut_path = os.path.join(startup_folder, 'WorkTracker.lnk')
-        elif sys.platform == "linux":
-            startup_folder = os.path.expanduser('~/.config/autostart')
-            shortcut_path = os.path.join(startup_folder, 'worktracker.desktop')
-        else:
-            return
-
-        if os.path.exists(shortcut_path):
-            self.autostart_checkbox.setChecked(True)
-
     def toggle_autostart(self, state):
-        if sys.platform == "win32":
-            startup_folder = os.path.join(os.getenv('APPDATA'), 'Microsoft', 'Windows', 'Start Menu', 'Programs',
-                                          'Startup')
-            shortcut_path = os.path.join(startup_folder, 'WorkTracker.lnk')
-        elif sys.platform == "linux":
-            startup_folder = os.path.expanduser('~/.config/autostart')
-            shortcut_path = os.path.join(startup_folder, 'worktracker.desktop')
-        else:
-            return
-
         if state == Qt.Checked:
-            if sys.platform == "win32":
-                import winshell
-                from win32com.client import Dispatch
-                shell = Dispatch('WScript.Shell')
-                shortcut = shell.CreateShortCut(shortcut_path)
-                shortcut.Targetpath = sys.executable
-                shortcut.Arguments = os.path.abspath(__file__)
-                shortcut.WorkingDirectory = os.path.dirname(os.path.abspath(__file__))
-                shortcut.save()
-            elif sys.platform == "linux":
-                if not os.path.exists(startup_folder):
-                    os.makedirs(startup_folder)
-                with open(shortcut_path, 'w') as f:
-                    f.write(f"""[Desktop Entry]
-    Type=Application
-    Exec={sys.executable} {os.path.abspath(__file__)}
-    Hidden=false
-    NoDisplay=false
-    X-GNOME-Autostart-enabled=true
-    Name=WorkTracker
-    Comment=Start WorkTracker on login
-    """)
+            autostart_mgr.enable()
         else:
-            if os.path.exists(shortcut_path):
-                os.remove(shortcut_path)
+            autostart_mgr.disable()
 
     def init_summary_tab(self):
         tab = QWidget()
@@ -230,16 +341,6 @@ class WorkTracker(QWidget):
         widget.setLayout(layout)
         return widget
 
-    def load_data(self):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                self.data = json.load(f)
-                # 读取保存的窗口尺寸
-                self.stored_size = self.data.get("window_size", [800, 500])
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.data = {"projects": {}, "todos": [], "window_size": [800, 500]}  # 默认尺寸
-            self.stored_size = (800, 500)
-
     def refresh_table(self):
         self.update_type_combo()
         self.refresh_summary_table()
@@ -247,31 +348,22 @@ class WorkTracker(QWidget):
 
     def update_type_combo(self):
         self.todo_type_input.clear()
-        for name, info in self.data["projects"].items():
+        for name, info in data_mgr.data["projects"].items():
             self.todo_type_input.addItem(f"{name} ({info['unit']})")
-
-    def save_data(self):
-        # 确保每次保存都包含最新尺寸
-        if not hasattr(self, 'data'):
-            self.data = {}
-        self.data["window_size"] = [self.width(), self.height()]
-
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=4)
 
     def add_project(self):
         name = self.name_input.text().strip()
         unit = self.unit_input.text().strip()
         progress_type = ProgressType.ABSOLUTE if self.progress_type_combo.currentIndex() == 0 else ProgressType.CUMULATIVE
 
-        if name and unit and name not in self.data["projects"]:
-            self.data["projects"][name] = {
+        if name and unit and name not in data_mgr.data["projects"]:
+            data_mgr.data["projects"][name] = {
                 "unit": unit,
                 "count": 0,
                 "progress_type": progress_type
             }
             self.update_type_combo()
-            self.save_data()
+            data_mgr.save()
             self.refresh_summary_table()
 
     def add_todo(self):
@@ -294,9 +386,9 @@ class WorkTracker(QWidget):
         type_name = type_name.strip()
         unit = unit[:-1].strip()
 
-        project = self.data["projects"][type_name]
+        project = data_mgr.data["projects"][type_name]
 
-        self.data["todos"].append({
+        data_mgr.data["todos"].append({
             "name": name,
             "type": type_name,
             "unit": unit,
@@ -309,12 +401,12 @@ class WorkTracker(QWidget):
 
         self.todo_name_input.clear()
         self.todo_target_input.clear()
-        self.save_data()
+        data_mgr.save()
         self.refresh_todo_tables()
 
     def refresh_summary_table(self):
-        self.table.setRowCount(len(self.data["projects"]))
-        for row, (name, info) in enumerate(self.data["projects"].items()):
+        self.table.setRowCount(len(data_mgr.data["projects"]))
+        for row, (name, info) in enumerate(data_mgr.data["projects"].items()):
             unit_item = QTableWidgetItem(f"{name} ({info['unit']})")
             count_item = QTableWidgetItem(str(info["count"]))
 
@@ -332,7 +424,7 @@ class WorkTracker(QWidget):
         for table in [self.todo_table, self.completed_table]:
             table.setRowCount(0)
 
-        for idx, todo in enumerate(self.data["todos"]):
+        for idx, todo in enumerate(data_mgr.data["todos"]):
             table = self.completed_table if todo["completed"] else self.todo_table
             row = table.rowCount()
             table.insertRow(row)
@@ -404,7 +496,7 @@ class WorkTracker(QWidget):
                 table.setItem(row, 5, QTableWidgetItem(todo.get("complete_time", "")))
 
     def update_progress(self, index):
-        todo = self.data["todos"][index]
+        todo = data_mgr.data["todos"][index]
         dialog = QInputDialog(self)
         dialog.setWindowTitle("更新进度")
 
@@ -423,47 +515,47 @@ class WorkTracker(QWidget):
             value = dialog.doubleValue()
 
             if todo["progress_type"] == ProgressType.ABSOLUTE:
-                self.data["todos"][index]["progress"] = value
+                data_mgr.data["todos"][index]["progress"] = value
             else:
-                self.data["todos"][index]["progress"] += value
+                data_mgr.data["todos"][index]["progress"] += value
 
             # 检查是否完成
-            if self.data["todos"][index]["progress"] >= todo["target"]:
+            if data_mgr.data["todos"][index]["progress"] >= todo["target"]:
                 self.complete_todo(index)
 
-            self.save_data()
+            data_mgr.save()
             self.refresh_todo_tables()
 
     def complete_todo(self, index):
-        todo = self.data["todos"][index]
+        todo = data_mgr.data["todos"][index]
         todo["completed"] = True
         todo["complete_time"] = QDate.currentDate().toString("yyyy-MM-dd")
-        self.data["projects"][todo["type"]]["count"] += 1
-        self.save_data()
+        data_mgr.data["projects"][todo["type"]]["count"] += 1
+        data_mgr.save()
 
     def delete_project(self, row):
-        name = list(self.data["projects"].keys())[row]
-        del self.data["projects"][name]
+        name = list(data_mgr.data["projects"].keys())[row]
+        del data_mgr.data["projects"][name]
         self.update_type_combo()
-        self.save_data()
+        data_mgr.save()
         self.refresh_summary_table()
 
     def delete_todo(self, index):
-        del self.data["todos"][index]
-        self.save_data()
+        del data_mgr.data["todos"][index]
+        data_mgr.save()
         self.refresh_todo_tables()
 
     def restore_todo(self, index):
-        todo = self.data["todos"][index]
+        todo = data_mgr.data["todos"][index]
         todo["completed"] = False
         if "complete_time" in todo:
             del todo["complete_time"]
-        self.data["projects"][todo["type"]]["count"] -= 1
-        self.save_data()
+        data_mgr.data["projects"][todo["type"]]["count"] -= 1
+        data_mgr.save()
         self.refresh_todo_tables()
 
     def edit_todo(self, index):
-        todo = self.data["todos"][index]
+        todo = data_mgr.data["todos"][index]
         dialog = QDialog(self)
         dialog.setWindowTitle("编辑TODO项")
         layout = QVBoxLayout()
@@ -520,7 +612,7 @@ class WorkTracker(QWidget):
                     new_progress = float(progress_edit.text())
                     todo["progress"] = min(new_progress, new_target)
 
-                self.save_data()
+                data_mgr.save()
                 self.refresh_todo_tables()
 
             except ValueError:
@@ -528,14 +620,14 @@ class WorkTracker(QWidget):
 
     def resizeEvent(self, event):
         # 窗口大小改变时实时保存
-        self.data["window_size"] = [self.width(), self.height()]
-        self.save_data()
+        data_mgr.data["window_size"] = [self.width(), self.height()]
+        data_mgr.save()
         super().resizeEvent(event)
 
     def closeEvent(self, event):
         # 保存当前窗口尺寸
-        self.data["window_size"] = [self.width(), self.height()]
-        self.save_data()
+        data_mgr.data["window_size"] = [self.width(), self.height()]
+        data_mgr.save()
         super().closeEvent(event)
 
     def format_progress(self, todo):
@@ -566,7 +658,7 @@ class WorkTracker(QWidget):
             with open(projects_path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.DictWriter(f, fieldnames=["类型", "单位", "进度类型", "完成数量"])
                 writer.writeheader()
-                for name, info in self.data["projects"].items():
+                for name, info in data_mgr.data["projects"].items():
                     writer.writerow({
                         "类型": name,
                         "单位": info["unit"],
@@ -582,7 +674,7 @@ class WorkTracker(QWidget):
                     "截止时间", "完成状态", "完成时间"
                 ])
                 writer.writeheader()
-                for todo in self.data["todos"]:
+                for todo in data_mgr.data["todos"]:
                     writer.writerow({
                         "名称": todo["name"],
                         "类型": todo["type"],
@@ -612,16 +704,16 @@ class WorkTracker(QWidget):
                 if "单位" in reader.fieldnames:  # 项目数据
                     for row in reader:
                         name = row["类型"]
-                        if name in self.data["projects"]:
+                        if name in data_mgr.data["projects"]:
                             # 更新现有项目
-                            self.data["projects"][name].update({
+                            data_mgr.data["projects"][name].update({
                                 "unit": row["单位"],
                                 "progress_type": row["进度类型"],
                                 "count": int(row["完成数量"])
                             })
                         else:
                             # 新增项目
-                            self.data["projects"][name] = {
+                            data_mgr.data["projects"][name] = {
                                 "unit": row["单位"],
                                 "progress_type": row["进度类型"],
                                 "count": int(row["完成数量"])
@@ -636,20 +728,20 @@ class WorkTracker(QWidget):
                                 raise ValueError(f"缺少必要字段: {field}")
 
                         # 添加类型存在性校验
-                        if row["类型"] not in self.data["projects"]:
+                        if row["类型"] not in data_mgr.data["projects"]:
                             raise ValueError(f"项目类型'{row['类型']}'尚未定义")
 
                         # 获取项目类型
                         type_name = row["类型"]
 
                         # 验证项目是否存在
-                        if type_name not in self.data["projects"]:
+                        if type_name not in data_mgr.data["projects"]:
                             QMessageBox.warning(self, "导入错误",
                                                 f"项目类型'{type_name}'不存在，请先创建该类型")
                             continue
 
                         # 从已存在的项目中获取单位
-                        unit = self.data["projects"][type_name]["unit"]
+                        unit = data_mgr.data["projects"][type_name]["unit"]
 
                         # 数据转换
                         todo = {
@@ -668,11 +760,11 @@ class WorkTracker(QWidget):
                         if not any(
                                 t["name"] == todo["name"] and
                                 t["type"] == todo["type"]
-                                for t in self.data["todos"]
+                                for t in data_mgr.data["todos"]
                         ):
-                            self.data["todos"].append(todo)
+                            data_mgr.data["todos"].append(todo)
 
-            self.save_data()
+            data_mgr.save()
             self.refresh_table()
             QMessageBox.information(self, "导入成功", "数据已成功加载")
 
@@ -680,7 +772,7 @@ class WorkTracker(QWidget):
             QMessageBox.critical(self, "导入失败", f"数据解析错误：{str(e)}")
 
     def set_app_icon(self):
-        icon_path = os.path.join(BASE_DIR, 'favicon.ico')
+        icon_path = os.path.join(DATA_DIR, 'favicon.ico')
 
         # Windows特殊处理
         if sys.platform == 'win32':
