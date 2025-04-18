@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QDate, QDateTime
 from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QUrl
+from PyQt5.QtWidgets import QDesktopServices
 
 
 def get_base_path():
@@ -310,7 +312,7 @@ class WorkTracker(QWidget):
         btn_layout.addWidget(self.export_btn)
 
         self.check_update_btn = QPushButton("检查更新")
-        self.check_update_btn.clicked.connect(self.check_for_updates)
+        self.check_update_btn.clicked.connect(self.check_update)
         btn_layout.addWidget(self.check_update_btn)
 
         layout.addWidget(btn_container)
@@ -1284,85 +1286,36 @@ class WorkTracker(QWidget):
         else:
             logging.warning(f"图标文件缺失: {icon_path}")
 
-    def check_for_updates(self):
-        """检查新版本"""
+    def check_update(self):
+        """检查更新"""
         try:
-            # 发送版本检查请求
-            response = requests.get(self.UPDATE_URL, params={"version": self.VERSION})
+            response = requests.get('http://localhost:5009/api/check-update', 
+                                 params={'current_version': self.VERSION})
             if response.status_code == 200:
                 data = response.json()
-                if data.get("has_update"):
-                    new_version = data.get("version")
+                if data['has_update']:
                     msg = QMessageBox()
                     msg.setIcon(QMessageBox.Information)
                     msg.setWindowTitle("发现新版本")
-                    msg.setText(f"发现新版本 {new_version}\n当前版本 {self.VERSION}")
-                    msg.setInformativeText("是否现在更新？")
-                    msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-                    if msg.exec_() == QMessageBox.Yes:
-                        self.download_and_install_update(data.get("download_url"))
+                    msg.setText(f"发现新版本 {data['latest_version']}")
+                    msg.setInformativeText(data['description'])
+                    
+                    if data['download_url']:
+                        download_btn = msg.addButton("下载更新", QMessageBox.ActionRole)
+                        msg.addButton("稍后提醒", QMessageBox.RejectRole)
+                        
+                        msg.exec_()
+                        
+                        if msg.clickedButton() == download_btn:
+                            QDesktopServices.openUrl(QUrl(data['download_url']))
+                    else:
+                        msg.exec_()
                 else:
                     QMessageBox.information(self, "检查更新", "当前已是最新版本")
-        except Exception as e:
-            QMessageBox.warning(self, "检查更新失败", f"错误信息：{str(e)}")
-
-    def download_and_install_update(self, download_url):
-        """下载并安装更新"""
-        try:
-            # 创建临时目录
-            temp_dir = os.path.join(DATA_DIR, "temp")
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # 下载更新包
-            response = requests.get(download_url, stream=True)
-            if response.status_code == 200:
-                # 保存更新包
-                update_file = os.path.join(temp_dir, "update.zip")
-                with open(update_file, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                
-                # 创建更新脚本
-                if sys.platform == "win32":
-                    script_content = f"""
-@echo off
-timeout /t 2 /nobreak
-del /f /q "{sys.executable}"
-move /y "{update_file}" "{sys.executable}"
-start "" "{sys.executable}"
-del /f /q "%~f0"
-                    """
-                    script_ext = ".bat"
-                else:  # macOS 和 Linux
-                    script_content = f"""
-#!/bin/bash
-sleep 2
-rm "{sys.executable}"
-mv "{update_file}" "{sys.executable}"
-chmod +x "{sys.executable}"
-"{sys.executable}" &
-rm -- "$0"
-                    """
-                    script_ext = ".sh"
-                
-                # 保存并执行更新脚本
-                script_path = os.path.join(temp_dir, f"update{script_ext}")
-                with open(script_path, 'w') as f:
-                    f.write(script_content)
-                
-                if sys.platform != "win32":
-                    os.chmod(script_path, 0o755)
-                
-                # 执行更新脚本
-                subprocess.Popen([script_path], shell=True)
-                
-                # 退出当前程序
-                QApplication.quit()
             else:
-                QMessageBox.warning(self, "下载更新失败", "无法下载更新包")
+                QMessageBox.warning(self, "检查更新", "检查更新失败，请稍后重试")
         except Exception as e:
-            QMessageBox.warning(self, "更新失败", f"错误信息：{str(e)}")
+            QMessageBox.warning(self, "检查更新", f"检查更新失败：{str(e)}")
 
 
 if __name__ == "__main__":
