@@ -15,12 +15,10 @@ from PyQt5.QtWidgets import (
     QLineEdit, QLabel, QMessageBox, QTabWidget,
     QComboBox, QProgressBar, QDateEdit, QInputDialog,
     QSizePolicy, QCheckBox, QFileDialog, QDialog,
-    QDialogButtonBox, QSpinBox, QCalendarWidget
+    QDialogButtonBox, QSpinBox, QCalendarWidget, QMenu
 )
-from PyQt5.QtCore import Qt, QDate, QDateTime
-from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QUrl
-from PyQt5.QtWidgets import QDesktopServices
+from PyQt5.QtCore import Qt, QDate, QDateTime, QUrl, QTimer
+from PyQt5.QtGui import QIcon, QDesktopServices
 
 
 def get_base_path():
@@ -39,6 +37,8 @@ def get_base_path():
     os.makedirs(data_dir, exist_ok=True)
     return os.path.join(data_dir)
 
+
+VERSION = "0.0.1"  # 当前版本号
 
 DATA_DIR = get_base_path()
 DATA_FILE = os.path.join(DATA_DIR, "data.json")
@@ -261,15 +261,16 @@ autostart_mgr = AutoStartManager()
 
 
 class WorkTracker(QWidget):
-    VERSION = "1.0.0"  # 当前版本号
-    UPDATE_URL = "https://example.com/updates/check"  # 更新检查地址
-    DOWNLOAD_URL = "https://example.com/updates/download"  # 更新包下载地址
+    UPDATE_URL = "http://localhost:5010/api/check-update"  # 更新检查地址
 
     def __init__(self):
         super().__init__()
         self.initUI()
         self.init_state()
         self.refresh_table()
+        
+        # 启动时自动检查更新
+        QTimer.singleShot(1000, self.check_update)  # 延迟1秒检查更新，避免影响启动速度
 
     def init_state(self):
         # 窗口尺寸初始化
@@ -303,16 +304,32 @@ class WorkTracker(QWidget):
         self.autostart_checkbox.stateChanged.connect(self.toggle_autostart)
         btn_layout.addWidget(self.autostart_checkbox)
 
-        self.import_btn = QPushButton("导入数据")
-        self.import_btn.clicked.connect(self.import_data)
-        btn_layout.addWidget(self.import_btn)
-
-        self.export_btn = QPushButton("导出全部数据")
-        self.export_btn.clicked.connect(self.export_all_data)
-        btn_layout.addWidget(self.export_btn)
+        # 创建数据操作菜单
+        data_menu_btn = QPushButton("数据操作")
+        data_menu = QMenu()
+        
+        import_action = data_menu.addAction("导入数据")
+        import_action.triggered.connect(self.import_data)
+        
+        export_action = data_menu.addAction("导出全部数据")
+        export_action.triggered.connect(self.export_all_data)
+        
+        data_menu.addSeparator()
+        
+        clear_projects_action = data_menu.addAction("清空项目数据")
+        clear_projects_action.triggered.connect(lambda: self.clear_data("projects"))
+        
+        clear_todos_action = data_menu.addAction("清空TODO数据")
+        clear_todos_action.triggered.connect(lambda: self.clear_data("todos"))
+        
+        clear_kpis_action = data_menu.addAction("清空KPI数据")
+        clear_kpis_action.triggered.connect(lambda: self.clear_data("kpis"))
+        
+        data_menu_btn.setMenu(data_menu)
+        btn_layout.addWidget(data_menu_btn)
 
         self.check_update_btn = QPushButton("检查更新")
-        self.check_update_btn.clicked.connect(self.check_update)
+        self.check_update_btn.clicked.connect(lambda: self.check_update(show_no_update=True))
         btn_layout.addWidget(self.check_update_btn)
 
         layout.addWidget(btn_container)
@@ -1143,31 +1160,33 @@ class WorkTracker(QWidget):
         if not file_path: return
 
         try:
+            file_name = os.path.basename(file_path).lower()
+            
             with open(file_path, 'r', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
 
-                if "单位" in reader.fieldnames:  # 项目数据
+                if file_name == "projects.csv":  # 项目数据
                     for row in reader:
                         name = row["类型"]
                         if name in data_mgr.data["projects"]:
                             # 更新现有项目
                             data_mgr.data["projects"][name].update({
                                 "unit": row["单位"],
-                                "progress_type": row["progress_type"],
+                                "progress_type": row.get("进度类型", ProgressType.ABSOLUTE),  # 使用get方法，默认值为ABSOLUTE
                                 "count": int(row["完成数量"])
                             })
                         else:
                             # 新增项目
                             data_mgr.data["projects"][name] = {
                                 "unit": row["单位"],
-                                "progress_type": row["progress_type"],
+                                "progress_type": row.get("进度类型", ProgressType.ABSOLUTE),  # 使用get方法，默认值为ABSOLUTE
                                 "count": int(row["完成数量"])
                             }
 
-                elif "名称" in reader.fieldnames and "类型" in reader.fieldnames:  # TODO数据
+                elif file_name == "todos.csv":  # TODO数据
                     for row in reader:
                         # 添加校验逻辑
-                        required_fields = ["名称", "类型", "目标值", "进度类型", "截止时间"]
+                        required_fields = ["名称", "类型", "目标值", "截止时间", "完成状态"]
                         for field in required_fields:
                             if field not in row or not row[field]:
                                 raise ValueError(f"缺少必要字段: {field}")
@@ -1185,8 +1204,18 @@ class WorkTracker(QWidget):
                                                 f"项目类型'{type_name}'不存在，请先创建该类型")
                             continue
 
-                        # 从已存在的项目中获取单位
-                        unit = data_mgr.data["projects"][type_name]["unit"]
+                        # 从已存在的项目中获取单位和进度类型
+                        project = data_mgr.data["projects"][type_name]
+                        unit = project["unit"]
+                        progress_type = project["progress_type"]
+
+                        # 解析完成状态和完成时间
+                        is_completed = row["完成状态"].strip() == "已完成"
+                        complete_time = row["完成时间"].strip() if is_completed else ""
+                        
+                        # 如果已完成但没有完成时间，使用当前时间
+                        if is_completed and not complete_time:
+                            complete_time = QDate.currentDate().toString("yyyy-MM-dd")
 
                         # 数据转换
                         todo = {
@@ -1194,12 +1223,16 @@ class WorkTracker(QWidget):
                             "type": row["类型"],
                             "unit": unit,
                             "target": float(row["目标值"]),
-                            "progress": float(row["当前进度"]),
-                            "progress_type": row["进度类型"],
+                            "progress": float(row["当前进度"]) if row["当前进度"] else 0.0,
+                            "progress_type": progress_type,
                             "deadline": row["截止时间"],
-                            "completed": row["完成状态"] == "已完成",
-                            "complete_time": row["完成时间"] if row["完成状态"] == "已完成" else ""
+                            "completed": is_completed,
+                            "complete_time": complete_time
                         }
+
+                        # 如果已完成，更新项目计数
+                        if is_completed:
+                            data_mgr.data["projects"][type_name]["count"] += 1
 
                         # 避免重复添加
                         if not any(
@@ -1209,7 +1242,7 @@ class WorkTracker(QWidget):
                         ):
                             data_mgr.data["todos"].append(todo)
                             
-                elif "KPI ID" in reader.fieldnames:  # KPI记录数据
+                elif file_name == "kpi_records.csv":  # KPI记录数据
                     for row in reader:
                         date_str = row["日期"]
                         kpi_id = int(row["KPI ID"])
@@ -1217,7 +1250,7 @@ class WorkTracker(QWidget):
                         
                         data_mgr.save_kpi_record(date_str, kpi_id, completed)
                         
-                elif "ID" in reader.fieldnames and "名称" in reader.fieldnames:  # KPI数据
+                elif file_name == "kpis.csv":  # KPI数据
                     for row in reader:
                         kpi_id = int(row["ID"])
                         name = row["名称"]
@@ -1286,18 +1319,28 @@ class WorkTracker(QWidget):
         else:
             logging.warning(f"图标文件缺失: {icon_path}")
 
-    def check_update(self):
-        """检查更新"""
+    def check_update(self, show_no_update=False):
+        """检查更新
+        Args:
+            show_no_update (bool): 是否显示"已是最新版本"的提示
+        """
+        platform = 'windows'
+        if sys.platform == 'darwin':
+            platform = 'macos'
+        
         try:
-            response = requests.get('http://localhost:5009/api/check-update', 
-                                 params={'current_version': self.VERSION})
+            params = {
+                "version": VERSION,
+                "platform": platform
+            }
+            response = requests.get(self.UPDATE_URL, params=params)
             if response.status_code == 200:
                 data = response.json()
                 if data['has_update']:
                     msg = QMessageBox()
                     msg.setIcon(QMessageBox.Information)
                     msg.setWindowTitle("发现新版本")
-                    msg.setText(f"发现新版本 {data['latest_version']}")
+                    msg.setText(f"当前版本: {VERSION}\n发现新版本: {data['version']}")
                     msg.setInformativeText(data['description'])
                     
                     if data['download_url']:
@@ -1310,12 +1353,48 @@ class WorkTracker(QWidget):
                             QDesktopServices.openUrl(QUrl(data['download_url']))
                     else:
                         msg.exec_()
-                else:
-                    QMessageBox.information(self, "检查更新", "当前已是最新版本")
+                elif show_no_update:  # 只有在show_no_update为True时才显示"已是最新版本"的提示
+                    QMessageBox.information(self, "检查更新", f"当前版本: {VERSION}\n当前已是最新版本")
             else:
                 QMessageBox.warning(self, "检查更新", "检查更新失败，请稍后重试")
         except Exception as e:
             QMessageBox.warning(self, "检查更新", f"检查更新失败：{str(e)}")
+
+    def clear_data(self, data_type):
+        """清空指定类型的数据
+        Args:
+            data_type (str): 数据类型，可选值：projects, todos, kpis
+        """
+        # 确认对话框
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("确认清空")
+        
+        if data_type == "projects":
+            msg.setText("确定要清空所有项目数据吗？")
+            msg.setInformativeText("此操作将删除所有项目类型及其统计数据，且不可恢复。")
+        elif data_type == "todos":
+            msg.setText("确定要清空所有TODO数据吗？")
+            msg.setInformativeText("此操作将删除所有TODO项及其进度数据，且不可恢复。")
+        elif data_type == "kpis":
+            msg.setText("确定要清空所有KPI数据吗？")
+            msg.setInformativeText("此操作将删除所有KPI及其记录数据，且不可恢复。")
+            
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.No)
+        
+        if msg.exec_() == QMessageBox.Yes:
+            if data_type == "projects":
+                data_mgr.data["projects"] = {}
+            elif data_type == "todos":
+                data_mgr.data["todos"] = []
+            elif data_type == "kpis":
+                data_mgr.data["kpis"] = []
+                data_mgr.data["kpi_records"] = {}
+                
+            data_mgr.save()
+            self.refresh_table()
+            QMessageBox.information(self, "清空成功", f"已清空所有{data_type}数据")
 
 
 if __name__ == "__main__":
