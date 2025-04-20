@@ -1,0 +1,27 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',
+          [StringStruct(u'CompanyName', u'CMSEric'),
+           StringStruct(u'FileDescription', u'TodoTracker'),
+           StringStruct(u'FileVersion', u'0.0.2'),
+           StringStruct(u'InternalName', u'TodoTracker'),
+           StringStruct(u'LegalCopyright', u'Copyright (c) 2024 CMSEric'),
+           StringStruct(u'OriginalFilename', u'TodoTracker.exe'),
+           StringStruct(u'ProductName', u'TodoTracker'),
+           StringStruct(u'ProductVersion', u'0.0.2')])
+      ])
+  ]
+) 
