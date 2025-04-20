@@ -33,14 +33,13 @@ class Version(db.Model):
     version = db.Column(db.String(20), unique=True, nullable=False)
     platform = db.Column(db.String(20), nullable=False)  # 新增平台字段
     description = db.Column(db.Text)
-    download_url = db.Column(db.String(500), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(local_tz))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(local_tz), onupdate=lambda: datetime.now(local_tz))
 
     def to_dict(self):
         # 根据平台添加对应的后缀
-        suffix = '.exe' if self.platform == PlatformType.WINDOWS else '.app'
+        suffix = '.exe' if self.platform == PlatformType.WINDOWS else '.dmg'
         return {
             'id': self.id,
             'version': self.version,
@@ -68,23 +67,22 @@ def check_update():
     if platform not in [PlatformType.WINDOWS, PlatformType.MACOS]:
         return jsonify({'error': 'Invalid platform'}), 400
 
-    # 获取指定平台的最新活跃版本
+    # 获取指定平台的最新版本（按版本号排序）
     latest_version = Version.query.filter_by(
-        is_active=True,
         platform=platform
-    ).order_by(Version.id.desc()).first()
+    ).order_by(Version.version.desc()).first()
     
     if not latest_version:
         return jsonify({
             'has_update': False,
-            'message': 'No active version found'
+            'message': 'No version found for this platform'
         })
 
     # 比较版本号
     has_update = latest_version.version > current_version
     
     # 根据平台添加对应的后缀
-    suffix = '.exe' if platform == PlatformType.WINDOWS else '.app'
+    suffix = '.exe' if platform == PlatformType.WINDOWS else '.dmg'
     
     return jsonify({
         'has_update': has_update,
@@ -130,7 +128,6 @@ def create_version():
             version=data['version'],
             platform=data['platform'],
             description=data.get('description', ''),
-            download_url=data['version'],
             is_active=data.get('is_active', True)
         )
         db.session.add(version)
@@ -149,7 +146,6 @@ def update_version(version_id):
     try:
         if 'version' in data:
             version.version = data['version']
-            version.download_url = data['version']
         if 'platform' in data:
             if data['platform'] not in [PlatformType.WINDOWS, PlatformType.MACOS]:
                 return jsonify({'error': 'Invalid platform'}), 400
@@ -172,7 +168,7 @@ def delete_version(version_id):
     try:
         db.session.delete(version)
         db.session.commit()
-        return '', 204
+        return 'success', 204
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
