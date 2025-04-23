@@ -38,14 +38,13 @@ print(f"工作目录已切换到: {os.getcwd()}")
 main_py = 'main.py'
 favicon = 'favicon.ico'
 version_file = 'version_info.txt'
-requirements = 'requirements.txt'
 
 print(f"主程序路径: {main_py}")
 print(f"图标路径: {favicon}")
 print(f"版本文件路径: {version_file}")
 
 # 检查文件是否存在
-for file_path in [main_py, favicon, version_file, requirements]:
+for file_path in [main_py, favicon, version_file]:
     if not os.path.exists(file_path):
         print(f"警告: 文件不存在 - {file_path}")
     else:
