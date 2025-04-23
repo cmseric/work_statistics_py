@@ -1,6 +1,7 @@
 build
 dist
 packages
+.vscode
 
 data.json
 data_todo.json
