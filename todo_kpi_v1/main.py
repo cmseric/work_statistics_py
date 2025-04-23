@@ -3,10 +3,10 @@ import sys
 import json
 import logging
 import csv
-import shutil
+# import shutil
 import datetime
 import requests
-import subprocess
+# import subprocess
 from enum import Enum
 
 from PyQt5.QtWidgets import (
@@ -42,6 +42,8 @@ VERSION = "0.0.1"  # 当前版本号
 
 DATA_DIR = get_base_path()
 DATA_FILE = os.path.join(DATA_DIR, "data.json")
+
+IS_DEV = os.getenv('ENV') == 'development'
 
 logging.basicConfig(
     filename=os.path.join(DATA_DIR, "debug.log"),
@@ -270,7 +272,9 @@ class WorkTracker(QWidget):
         self.refresh_table()
         
         # 启动时自动检查更新
-        QTimer.singleShot(1000, self.check_update)  # 延迟1秒检查更新，避免影响启动速度
+        # TODO: DEV TEMP
+        if IS_DEV:
+            QTimer.singleShot(1000, self.check_update)  # 延迟1秒检查更新，避免影响启动速度
 
     def init_state(self):
         # 窗口尺寸初始化
@@ -328,9 +332,11 @@ class WorkTracker(QWidget):
         data_menu_btn.setMenu(data_menu)
         btn_layout.addWidget(data_menu_btn)
 
-        self.check_update_btn = QPushButton("检查更新")
-        self.check_update_btn.clicked.connect(lambda: self.check_update(show_no_update=True))
-        btn_layout.addWidget(self.check_update_btn)
+        # TODO: DEV TEMP
+        if IS_DEV:
+            self.check_update_btn = QPushButton("检查更新")
+            self.check_update_btn.clicked.connect(lambda: self.check_update(show_no_update=True))
+            btn_layout.addWidget(self.check_update_btn)
 
         layout.addWidget(btn_container)
 
