@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QSpinBox, QCalendarWidget, QMenu
 )
 from PyQt5.QtCore import Qt, QDate, QDateTime, QUrl, QTimer
-from PyQt5.QtGui import QIcon, QDesktopServices
+from PyQt5.QtGui import QIcon, QDesktopServices, QColor
 
 
 def get_base_path():
@@ -70,6 +70,13 @@ class DurationType(Enum):
     ONE_MONTH = "one_month"
     FOREVER = "forever"
 
+PERIOD_TYPE_LABELS = {
+    PeriodType.DAILY: "每日",
+    PeriodType.WEEKLY: "每周",
+    PeriodType.MONTHLY: "每月",
+    PeriodType.CUSTOM: "自定义"
+}
+
 
 class DataManager:
     def __init__(self):
@@ -96,7 +103,13 @@ class DataManager:
                 return data
         except (FileNotFoundError, json.JSONDecodeError):
             return {
-                "projects": {}, 
+                "projects": {
+                    "读书": {"unit": "页", "count": 0, "progress_type": ProgressType.ABSOLUTE},
+                    "课程": {"unit": "课", "count": 0, "progress_type": ProgressType.ABSOLUTE},
+                    "运动": {"unit": "分钟", "count": 0, "progress_type": ProgressType.ABSOLUTE},
+                    "写作": {"unit": "字", "count": 0, "progress_type": ProgressType.ABSOLUTE},
+                    "编程": {"unit": "小时", "count": 0, "progress_type": ProgressType.ABSOLUTE}
+                },
                 "todos": [], 
                 "kpis": [], 
                 "kpi_records": {},
@@ -354,7 +367,9 @@ class WorkTracker(QWidget):
         form_layout = QHBoxLayout()
 
         self.name_input = QLineEdit()
-        self.unit_input = QLineEdit("页")
+        self.name_input.setPlaceholderText("请输入项目类型名称")
+        self.unit_input = QLineEdit()
+        self.unit_input.setPlaceholderText("请输入单位")
         self.progress_type_combo = QComboBox()
         self.progress_type_combo.addItems(["准确进度", "累计进度"])
         self.add_button = QPushButton("添加类型")
@@ -389,8 +404,10 @@ class WorkTracker(QWidget):
         form_layout = QHBoxLayout()
 
         self.todo_name_input = QLineEdit()
+        self.todo_name_input.setPlaceholderText("请输入TODO名称")
         self.todo_type_input = QComboBox()
         self.todo_target_input = QLineEdit()
+        self.todo_target_input.setPlaceholderText("请输入目标数量")
         self.todo_deadline_input = QDateEdit()
         self.todo_deadline_input.setDate(QDate.currentDate())
         self.todo_deadline_input.setDisplayFormat("yyyy-MM-dd")
@@ -433,18 +450,31 @@ class WorkTracker(QWidget):
         self.kpi_name_input.setPlaceholderText("KPI名称")
         
         self.kpi_type_input = QComboBox()
-        self.kpi_type_input.addItems([t.value for t in PeriodType])
+        # 使用映射关系添加选项
+        for period_type in PeriodType:
+            self.kpi_type_input.addItem(PERIOD_TYPE_LABELS[period_type], period_type.value)
         
         self.kpi_custom_days_input = QSpinBox()
         self.kpi_custom_days_input.setRange(1, 365)
         self.kpi_custom_days_input.setValue(7)
         self.kpi_custom_days_input.setEnabled(False)
+        self.kpi_custom_days_input.hide()  # 初始时隐藏
         
         self.kpi_target_input = QLineEdit()
         self.kpi_target_input.setPlaceholderText("目标数量")
         
         self.kpi_todo_input = QComboBox()
+        self.kpi_todo_input.addItem("无")  # 添加"无"选项
         self.update_todo_combo()
+        
+        # 添加项目类型选择
+        self.kpi_project_type_input = QComboBox()
+        self.update_project_type_combo()
+        self.kpi_project_type_input.hide()  # 初始时隐藏
+        
+        # 添加项目类型标签
+        self.project_type_label = QLabel("项目类型:")
+        self.project_type_label.hide()  # 初始时隐藏
         
         self.kpi_duration_input = QComboBox()
         self.kpi_duration_input.addItems([
@@ -463,12 +493,12 @@ class WorkTracker(QWidget):
         
         # 第一行
         first_row = QHBoxLayout()
+        first_row.addWidget(QLabel("关联Todo:"))
+        first_row.addWidget(self.kpi_todo_input)
         first_row.addWidget(QLabel("名称:"))
         first_row.addWidget(self.kpi_name_input)
-        first_row.addWidget(QLabel("周期:"))
-        first_row.addWidget(self.kpi_type_input)
-        first_row.addWidget(QLabel("自定义天数:"))
-        first_row.addWidget(self.kpi_custom_days_input)
+        first_row.addWidget(self.project_type_label)  # 使用变量引用
+        first_row.addWidget(self.kpi_project_type_input)
         first_row.addWidget(self.kpi_add_button)
         first_row.addStretch(1)
         
@@ -476,8 +506,9 @@ class WorkTracker(QWidget):
         second_row = QHBoxLayout()
         second_row.addWidget(QLabel("目标:"))
         second_row.addWidget(self.kpi_target_input)
-        second_row.addWidget(QLabel("关联Todo:"))
-        second_row.addWidget(self.kpi_todo_input)
+        second_row.addWidget(QLabel("周期:"))
+        second_row.addWidget(self.kpi_type_input)
+        second_row.addWidget(self.kpi_custom_days_input)  # 自定义天数输入框
         second_row.addWidget(QLabel("持续时间:"))
         second_row.addWidget(self.kpi_duration_input)
         second_row.addStretch(1)
@@ -486,8 +517,9 @@ class WorkTracker(QWidget):
         form_layout.addLayout(first_row)
         form_layout.addLayout(second_row)
         
-        # 连接周期类型变化事件
-        self.kpi_type_input.currentTextChanged.connect(self.on_kpi_type_changed)
+        # 连接事件
+        self.kpi_type_input.currentIndexChanged.connect(self.on_kpi_type_changed)
+        self.kpi_todo_input.currentTextChanged.connect(self.on_todo_changed)
         
         # KPI表格
         self.kpi_table = QTableWidget()
@@ -503,6 +535,12 @@ class WorkTracker(QWidget):
         
         date_layout.addWidget(QLabel("查看日期:"))
         date_layout.addWidget(self.kpi_date_input)
+        
+        # 添加KPI总结按钮
+        summary_btn = QPushButton("KPI总结")
+        summary_btn.clicked.connect(self.show_kpi_summary)
+        date_layout.addWidget(summary_btn)
+        
         date_layout.addStretch(1)
         
         # 添加到主布局
@@ -513,10 +551,28 @@ class WorkTracker(QWidget):
         tab.setLayout(layout)
         self.tabs.addTab(tab, "KPI管理")
         
-    def on_kpi_type_changed(self, period_type):
+    def update_project_type_combo(self):
+        """更新项目类型下拉列表"""
+        self.kpi_project_type_input.clear()
+        for name, info in data_mgr.data["projects"].items():
+            self.kpi_project_type_input.addItem(f"{name} ({info['unit']})")
+            
+    def on_todo_changed(self, todo_text):
+        """当关联Todo改变时"""
+        # 如果没有关联Todo，显示项目类型选择
+        show_project_type = todo_text == "无"
+        self.kpi_project_type_input.setVisible(show_project_type)
+        self.kpi_project_type_input.setEnabled(show_project_type)
+        self.project_type_label.setVisible(show_project_type)  # 同时显示/隐藏标签
+        
+    def on_kpi_type_changed(self, index):
         """当KPI周期类型改变时"""
-        is_custom = period_type == PeriodType.CUSTOM.value
+        period_type = PeriodType(self.kpi_type_input.currentData())
+        is_custom = period_type == PeriodType.CUSTOM
+        
+        # 根据是否选择自定义来显示/隐藏和启用/禁用自定义天数输入框
         self.kpi_custom_days_input.setEnabled(is_custom)
+        self.kpi_custom_days_input.setVisible(is_custom)
         
     def init_kpi_table(self):
         """初始化KPI表格"""
@@ -539,17 +595,21 @@ class WorkTracker(QWidget):
     def update_todo_combo(self):
         """更新Todo下拉列表"""
         self.kpi_todo_input.clear()
-        self.kpi_todo_input.addItem("无")
+        self.kpi_todo_input.addItem("无")  # 添加"无"选项
+        
+        # 获取已关联的Todo ID列表
+        used_todo_ids = {kpi["todo_id"] for kpi in data_mgr.data["kpis"] if kpi["todo_id"] is not None}
         
         for todo in data_mgr.data["todos"]:
-            if not todo["completed"]:
+            # 只显示未完成且未关联的Todo
+            if not todo["completed"] and data_mgr.data["todos"].index(todo) not in used_todo_ids:
                 self.kpi_todo_input.addItem(f"{todo['name']} ({todo['type']})")
                 
     def add_kpi(self):
         """添加新的KPI"""
         name = self.kpi_name_input.text().strip()
-        period_type = self.kpi_type_input.currentText()
-        custom_days = self.kpi_custom_days_input.value() if period_type == PeriodType.CUSTOM.value else None
+        period_type = PeriodType(self.kpi_type_input.currentData())
+        custom_days = self.kpi_custom_days_input.value() if period_type == PeriodType.CUSTOM else None
         target_str = self.kpi_target_input.text().strip()
         todo_str = self.kpi_todo_input.currentText()
         duration_str = self.kpi_duration_input.currentText()
@@ -568,21 +628,35 @@ class WorkTracker(QWidget):
             QMessageBox.warning(self, "错误", "目标数量必须是数字")
             return
             
-        # 解析关联的Todo
+        # 解析关联的Todo和单位
         todo_id = None
         unit = None
+        
         if todo_str != "无":
+            # 从关联的Todo获取单位
             todo_name = todo_str.split(" (")[0]
             for i, todo in enumerate(data_mgr.data["todos"]):
                 if todo["name"] == todo_name and not todo["completed"]:
                     todo_id = i
                     unit = todo["unit"]
+                    # 如果名称为空，使用Todo的名称
+                    if not name:
+                        name = todo_name
                     break
-                    
-        if todo_id is None:
-            QMessageBox.warning(self, "错误", "请选择关联的Todo项")
-            return
-                    
+        else:
+            # 从项目类型获取单位
+            project_type = self.kpi_project_type_input.currentText()
+            if not project_type:
+                QMessageBox.warning(self, "错误", "请选择项目类型")
+                return
+                
+            project_name = project_type.split(" (")[0]
+            if project_name in data_mgr.data["projects"]:
+                unit = data_mgr.data["projects"][project_name]["unit"]
+            else:
+                QMessageBox.warning(self, "错误", "无效的项目类型")
+                return
+            
         # 解析持续时间
         duration_type = None
         if duration_str == "一周":
@@ -596,7 +670,7 @@ class WorkTracker(QWidget):
         kpi = {
             "id": len(data_mgr.data["kpis"]),
             "name": name,
-            "period_type": period_type,
+            "period_type": period_type.value,
             "custom_days": custom_days,
             "target": target,
             "unit": unit,
@@ -612,14 +686,113 @@ class WorkTracker(QWidget):
         self.kpi_name_input.clear()
         self.kpi_target_input.clear()
         
+        # 更新Todo下拉列表
+        self.update_todo_combo()
+        
         # 刷新表格
         self.refresh_kpi_table()
         
+    def show_kpi_summary(self):
+        """显示KPI总结窗口"""
+        summary_window = QDialog(self)
+        summary_window.setWindowTitle("KPI总结")
+        summary_window.setMinimumWidth(800)  # 增加窗口宽度
+        summary_window.setMinimumHeight(400)
+        
+        layout = QVBoxLayout()
+        
+        # 创建表格
+        table = QTableWidget()
+        table.setColumnCount(6)  # 增加一列
+        table.setHorizontalHeaderLabels(["KPI名称", "周期", "目标", "关联Todo", "完成率", "最近完成"])
+        
+        # 设置列宽
+        table.setColumnWidth(0, 150)  # KPI名称
+        table.setColumnWidth(1, 100)  # 周期
+        table.setColumnWidth(2, 80)   # 目标
+        table.setColumnWidth(3, 200)  # 关联Todo
+        table.setColumnWidth(4, 100)  # 完成率
+        table.setColumnWidth(5, 150)  # 最近完成
+        
+        # 计算统计数据
+        current_date = QDate.currentDate()
+        start_date = current_date.addDays(-30)  # 统计最近30天
+        
+        for kpi in data_mgr.data["kpis"]:
+            # 计算完成率
+            completed_days = 0
+            total_days = 0
+            last_completed_date = None
+            
+            date = start_date
+            while date <= current_date:
+                date_str = date.toString("yyyy-MM-dd")
+                if data_mgr.is_kpi_completed_for_date(kpi["id"], date_str):
+                    completed_days += 1
+                    last_completed_date = date
+                total_days += 1
+                date = date.addDays(1)
+            
+            completion_rate = (completed_days / total_days * 100) if total_days > 0 else 0
+            
+            # 添加行
+            row = table.rowCount()
+            table.insertRow(row)
+            
+            # KPI名称
+            table.setItem(row, 0, QTableWidgetItem(kpi["name"]))
+            
+            # 周期
+            period_type = PeriodType(kpi["period_type"])
+            period_text = PERIOD_TYPE_LABELS[period_type]
+            if period_type == PeriodType.CUSTOM and kpi["custom_days"]:
+                period_text = f"每{kpi['custom_days']}天"
+            table.setItem(row, 1, QTableWidgetItem(period_text))
+            
+            # 目标
+            table.setItem(row, 2, QTableWidgetItem(f"{kpi['target']}{kpi['unit']}"))
+            
+            # 关联Todo
+            todo_text = "无"
+            if kpi["todo_id"] is not None and kpi["todo_id"] < len(data_mgr.data["todos"]):
+                todo = data_mgr.data["todos"][kpi["todo_id"]]
+                todo_text = f"{todo['name']} ({todo['type']})"
+            table.setItem(row, 3, QTableWidgetItem(todo_text))
+            
+            # 完成率
+            rate_item = QTableWidgetItem(f"{completion_rate:.1f}%")
+            rate_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 4, rate_item)
+            
+            # 最近完成
+            last_completed = "从未完成"
+            if last_completed_date:
+                last_completed = last_completed_date.toString("yyyy-MM-dd")
+            table.setItem(row, 5, QTableWidgetItem(last_completed))
+            
+            # 根据完成率设置颜色
+            if completion_rate >= 80:
+                color = QColor(144, 238, 144)  # 浅绿色
+            elif completion_rate >= 50:
+                color = QColor(255, 255, 0)    # 黄色
+            else:
+                color = QColor(255, 182, 193)  # 浅红色
+                
+            for col in range(table.columnCount()):
+                item = table.item(row, col)
+                item.setBackground(color)
+        
+        layout.addWidget(table)
+        summary_window.setLayout(layout)
+        summary_window.exec_()
+
     def refresh_kpi_table(self):
         """刷新KPI表格"""
         self.kpi_table.setRowCount(0)
         current_date = self.kpi_date_input.date().toString("yyyy-MM-dd")
         
+        # 先收集所有KPI项
+        kpi_items = []
         for kpi in data_mgr.data["kpis"]:
             # 检查KPI是否在有效期内
             created_date = QDate.fromString(kpi["created_at"], "yyyy-MM-dd")
@@ -639,36 +812,76 @@ class WorkTracker(QWidget):
                 end_date = created_date.addDays(duration_days)
                 if current_qdate < created_date or current_qdate > end_date:
                     continue
+                    
+            # 检查完成状态
+            is_completed = data_mgr.is_kpi_completed_for_date(kpi["id"], current_date)
+            
+            kpi_items.append({
+                "kpi": kpi,
+                "is_completed": is_completed
+            })
+            
+        # 按完成状态排序：未完成的在前
+        kpi_items.sort(key=lambda x: x["is_completed"])
+        
+        # 添加KPI项到表格
+        for item in kpi_items:
+            kpi = item["kpi"]
+            is_completed = item["is_completed"]
             
             row = self.kpi_table.rowCount()
             self.kpi_table.insertRow(row)
             
+            # 设置行样式
+            if is_completed:
+                for col in range(self.kpi_table.columnCount()):
+                    item = QTableWidgetItem()
+                    item.setFlags(item.flags() & ~Qt.ItemIsEnabled)  # 禁用单元格
+                    self.kpi_table.setItem(row, col, item)
+            
             # KPI名称
-            self.kpi_table.setItem(row, 0, QTableWidgetItem(kpi["name"]))
+            name_item = QTableWidgetItem(kpi["name"])
+            if is_completed:
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEnabled)
+            self.kpi_table.setItem(row, 0, name_item)
             
             # 周期
-            period_text = kpi["period_type"]
-            if kpi["period_type"] == PeriodType.CUSTOM.value and kpi["custom_days"]:
+            period_type = PeriodType(kpi["period_type"])
+            period_text = PERIOD_TYPE_LABELS[period_type]
+            if period_type == PeriodType.CUSTOM and kpi["custom_days"]:
                 period_text = f"每{kpi['custom_days']}天"
-            self.kpi_table.setItem(row, 1, QTableWidgetItem(period_text))
+            period_item = QTableWidgetItem(period_text)
+            if is_completed:
+                period_item.setFlags(period_item.flags() & ~Qt.ItemIsEnabled)
+            self.kpi_table.setItem(row, 1, period_item)
             
             # 目标
-            self.kpi_table.setItem(row, 2, QTableWidgetItem(str(kpi["target"])))
+            target_item = QTableWidgetItem(str(kpi["target"]))
+            if is_completed:
+                target_item.setFlags(target_item.flags() & ~Qt.ItemIsEnabled)
+            self.kpi_table.setItem(row, 2, target_item)
             
             # 单位
-            self.kpi_table.setItem(row, 3, QTableWidgetItem(kpi["unit"]))
+            unit_item = QTableWidgetItem(kpi["unit"])
+            if is_completed:
+                unit_item.setFlags(unit_item.flags() & ~Qt.ItemIsEnabled)
+            self.kpi_table.setItem(row, 3, unit_item)
             
             # 关联Todo
             todo_text = "无"
             if kpi["todo_id"] is not None and kpi["todo_id"] < len(data_mgr.data["todos"]):
                 todo = data_mgr.data["todos"][kpi["todo_id"]]
                 todo_text = f"{todo['name']} ({todo['type']})"
-            self.kpi_table.setItem(row, 4, QTableWidgetItem(todo_text))
+            todo_item = QTableWidgetItem(todo_text)
+            if is_completed:
+                todo_item.setFlags(todo_item.flags() & ~Qt.ItemIsEnabled)
+            self.kpi_table.setItem(row, 4, todo_item)
             
             # 完成状态
-            is_completed = data_mgr.is_kpi_completed_for_date(kpi["id"], current_date)
             status_item = QTableWidgetItem("已完成" if is_completed else "未完成")
             status_item.setTextAlignment(Qt.AlignCenter)
+            if is_completed:
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEnabled)
             self.kpi_table.setItem(row, 5, status_item)
             
             # 操作按钮
@@ -687,6 +900,18 @@ class WorkTracker(QWidget):
             btn_box.setLayout(btn_layout)
             self.kpi_table.setCellWidget(row, 6, btn_box)
             
+            # 为已完成的行添加样式
+            if is_completed:
+                # 设置行样式
+                for col in range(self.kpi_table.columnCount()):
+                    item = self.kpi_table.item(row, col)
+                    if item:
+                        item.setBackground(QColor(240, 240, 240))  # 浅灰色背景
+                        # 添加删除线
+                        font = item.font()
+                        font.setStrikeOut(True)
+                        item.setFont(font)
+
     def toggle_kpi_completion(self, kpi_id):
         """切换KPI完成状态"""
         current_date = self.kpi_date_input.date().toString("yyyy-MM-dd")
@@ -739,6 +964,7 @@ class WorkTracker(QWidget):
                 
         data_mgr.save()
         self.refresh_kpi_table()
+        self.update_todo_combo()  # 刷新TODO下拉列表
 
     def init_todo_table(self, table, headers):
         table.setColumnCount(len(headers))
@@ -817,7 +1043,7 @@ class WorkTracker(QWidget):
             "type": type_name,
             "unit": unit,
             "target": target,
-            "progress": 0.0 if project["progress_type"] == ProgressType.CUMULATIVE else None,
+            "progress": 0.0,  # 无论是什么进度类型，都初始化为0
             "progress_type": project["progress_type"],
             "deadline": deadline,
             "completed": False
