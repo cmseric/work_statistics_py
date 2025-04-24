@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QDate, QDateTime, QUrl, QTimer
 from PyQt5.QtGui import QIcon, QDesktopServices, QColor
 
+from ui.chat_dialog import ChatDialog
+
 
 def get_base_path():
     """获取跨平台数据存储路径"""
@@ -285,9 +287,8 @@ class WorkTracker(QWidget):
         self.refresh_table()
         
         # 启动时自动检查更新
-        # TODO: DEV TEMP
         if IS_DEV:
-            QTimer.singleShot(1000, self.check_update)  # 延迟1秒检查更新，避免影响启动速度
+            QTimer.singleShot(1000, self.check_update)
 
     def init_state(self):
         # 窗口尺寸初始化
@@ -317,6 +318,11 @@ class WorkTracker(QWidget):
         btn_layout.setContentsMargins(0, 10, 0, 0)  # 上边距10px
         btn_layout.addStretch(1)  # 左侧弹性空间
 
+        # 添加AI聊天按钮
+        self.chat_button = QPushButton("AI助手")
+        self.chat_button.clicked.connect(self.show_chat_dialog)
+        btn_layout.addWidget(self.chat_button)
+
         self.autostart_checkbox = QCheckBox("开机自动启动")
         self.autostart_checkbox.stateChanged.connect(self.toggle_autostart)
         btn_layout.addWidget(self.autostart_checkbox)
@@ -345,7 +351,6 @@ class WorkTracker(QWidget):
         data_menu_btn.setMenu(data_menu)
         btn_layout.addWidget(data_menu_btn)
 
-        # TODO: DEV TEMP
         if IS_DEV:
             self.check_update_btn = QPushButton("检查更新")
             self.check_update_btn.clicked.connect(lambda: self.check_update(show_no_update=True))
@@ -1627,6 +1632,11 @@ class WorkTracker(QWidget):
             data_mgr.save()
             self.refresh_table()
             QMessageBox.information(self, "清空成功", f"已清空所有{data_type}数据")
+
+    def show_chat_dialog(self):
+        """显示AI聊天对话框"""
+        dialog = ChatDialog(self)
+        dialog.exec_()
 
 
 if __name__ == "__main__":
