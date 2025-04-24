@@ -1,177 +1,85 @@
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
-import os
-import pytz
+from flask import Flask, request, jsonify, Response
+from services.version_service import VersionService
+from services.deepseek_service import DeepSeekService
+from services.ai_chat_service import AIChatService
+from services.routes import register_routes
+import json
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///versions.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# 获取当前文件所在目录的上级目录中的packages文件夹路径
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-packages_dir = os.path.join(parent_dir, 'packages')
-# 确保packages目录存在
-os.makedirs(packages_dir, exist_ok=True)
-# 设置下载地址前缀为file://协议
-app.config['DOWNLOAD_URL_PREFIX'] = f'file://{packages_dir}/TodoTracker_release_'
-
-# 平台类型枚举
-class PlatformType:
-    WINDOWS = 'windows'
-    MACOS = 'macos'
-
-db = SQLAlchemy(app)
-
-# 获取本地时区
-local_tz = pytz.timezone('Asia/Shanghai')
-
-# 版本模型
-class Version(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    version = db.Column(db.String(20), unique=True, nullable=False)
-    platform = db.Column(db.String(20), nullable=False)  # 新增平台字段
-    description = db.Column(db.Text)
-    is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(local_tz))
-    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(local_tz), onupdate=lambda: datetime.now(local_tz))
-
-    def to_dict(self):
-        # 根据平台添加对应的后缀
-        suffix = '.exe' if self.platform == PlatformType.WINDOWS else '.dmg'
-        return {
-            'id': self.id,
-            'version': self.version,
-            'platform': self.platform,
-            'description': self.description,
-            'download_url': f"{app.config['DOWNLOAD_URL_PREFIX']}{self.version}{suffix}",
-            'is_active': self.is_active,
-            'created_at': self.created_at.astimezone(local_tz).isoformat(),
-            'updated_at': self.updated_at.astimezone(local_tz).isoformat()
-        }
+# 初始化服务
+version_service = VersionService(app)
+deepseek_service = DeepSeekService(app)
+ai_chat_service = AIChatService(app)
 
 # 创建数据库表
-with app.app_context():
-    db.create_all()
+version_service.create_tables()
 
-# 检查版本更新
-@app.route('/api/check-update', methods=['GET'])
-def check_update():
-    current_version = request.args.get('version')
-    platform = request.args.get('platform')  # 新增平台参数
-    
-    if not current_version or not platform:
-        return jsonify({'error': 'Missing version or platform parameter'}), 400
+# 注册路由
+register_routes(
+    app, 
+    version_service, 
+    deepseek_service,
+    ai_chat_service
+)
 
-    if platform not in [PlatformType.WINDOWS, PlatformType.MACOS]:
-        return jsonify({'error': 'Invalid platform'}), 400
-
-    # 获取指定平台的最新版本（按版本号排序）
-    latest_version = Version.query.filter_by(
-        platform=platform
-    ).order_by(Version.version.desc()).first()
+# 添加聊天路由
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    data = request.get_json()
+    messages = data.get('messages', [])
     
-    if not latest_version:
-        return jsonify({
-            'has_update': False,
-            'message': 'No version found for this platform'
-        })
-
-    # 比较版本号
-    has_update = latest_version.version > current_version
+    if not messages:
+        return jsonify({'success': False, 'error': '消息不能为空'})
     
-    # 根据平台添加对应的后缀
-    suffix = '.exe' if platform == PlatformType.WINDOWS else '.dmg'
+    response = ai_chat_service.chat(messages)
     
-    return jsonify({
-        'has_update': has_update,
-        'version': latest_version.version if has_update else current_version,
-        'download_url': f"{app.config['DOWNLOAD_URL_PREFIX']}{latest_version.version}{suffix}" if has_update else None,
-        'description': latest_version.description if has_update else None
-    })
-
-# 获取所有版本
-@app.route('/api/versions', methods=['GET'])
-def get_versions():
-    platform = request.args.get('platform')  # 新增平台参数
-    query = Version.query
-    
-    if platform:
-        if platform not in [PlatformType.WINDOWS, PlatformType.MACOS]:
-            return jsonify({'error': 'Invalid platform'}), 400
-        query = query.filter_by(platform=platform)
-    
-    versions = query.order_by(Version.id.desc()).all()
-    return jsonify([version.to_dict() for version in versions])
-
-# 获取单个版本
-@app.route('/api/versions/<int:version_id>', methods=['GET'])
-def get_version(version_id):
-    version = Version.query.get_or_404(version_id)
-    return jsonify(version.to_dict())
-
-# 创建新版本
-@app.route('/api/versions', methods=['POST'])
-def create_version():
-    data = request.json
-    required_fields = ['version', 'platform']
-    
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': 'Missing required fields'}), 400
-        
-    if data['platform'] not in [PlatformType.WINDOWS, PlatformType.MACOS]:
-        return jsonify({'error': 'Invalid platform'}), 400
-        
-    try:
-        version = Version(
-            version=data['version'],
-            platform=data['platform'],
-            description=data.get('description', ''),
-            is_active=data.get('is_active', True)
-        )
-        db.session.add(version)
-        db.session.commit()
-        return jsonify(version.to_dict()), 201
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
-# 更新版本
-@app.route('/api/versions/<int:version_id>', methods=['PUT'])
-def update_version(version_id):
-    version = Version.query.get_or_404(version_id)
-    data = request.json
-    
-    try:
-        if 'version' in data:
-            version.version = data['version']
-        if 'platform' in data:
-            if data['platform'] not in [PlatformType.WINDOWS, PlatformType.MACOS]:
-                return jsonify({'error': 'Invalid platform'}), 400
-            version.platform = data['platform']
-        if 'description' in data:
-            version.description = data['description']
-        if 'is_active' in data:
-            version.is_active = data['is_active']
+    if response.get('success', False):
+        if 'stream' in response:
+            def generate():
+                try:
+                    for line in response['stream'].iter_lines():
+                        if line:
+                            try:
+                                line = line.decode('utf-8')
+                                if line.startswith('data: '):
+                                    data = line[6:]  # Remove 'data: ' prefix
+                                    if data == '[DONE]':
+                                        yield 'data: [DONE]\n\n'
+                                    else:
+                                        try:
+                                            json_data = json.loads(data)
+                                            if 'choices' in json_data and len(json_data['choices']) > 0:
+                                                content = json_data['choices'][0].get('delta', {}).get('content', '')
+                                                if content:
+                                                    yield f'data: {json.dumps({"content": content})}\n\n'
+                                        except json.JSONDecodeError as e:
+                                            print(f"JSON decode error: {e}, data: {data}")
+                                            continue
+                            except UnicodeDecodeError as e:
+                                print(f"Unicode decode error: {e}, line: {line}")
+                                continue
+                except Exception as e:
+                    print(f"Stream error: {e}")
+                    yield f'data: {json.dumps({"error": str(e)})}\n\n'
+                finally:
+                    yield 'data: [DONE]\n\n'
             
-        db.session.commit()
-        return jsonify(version.to_dict())
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
-
-# 删除版本
-@app.route('/api/versions/<int:version_id>', methods=['DELETE'])
-def delete_version(version_id):
-    version = Version.query.get_or_404(version_id)
-    try:
-        db.session.delete(version)
-        db.session.commit()
-        return 'success', 204
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 400
+            return Response(
+                generate(),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no'
+                }
+            )
+        else:
+            return jsonify(response)
+    else:
+        return jsonify(response)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5010, debug=True) 
