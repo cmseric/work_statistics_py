@@ -2,6 +2,7 @@ build/
 dist/
 packages/
 .vscode/
+__pycache__/
 
 data.json
 data_todo.json
@@ -13,3 +14,5 @@ todo.txt
 *.log
 
 *.db
+
+.env
